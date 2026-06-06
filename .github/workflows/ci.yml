@@ -1,0 +1,50 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    name: Repository audit
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          lfs: false
+
+      - name: Install audit tools
+        run: |
+          set -euo pipefail
+          install_dir="$RUNNER_TEMP/audit-tools"
+          mkdir -p "$install_dir"
+          echo "$install_dir" >> "$GITHUB_PATH"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+          version=8.30.1
+          curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${version}/gitleaks_${version}_linux_x64.tar.gz" \
+            -o "$RUNNER_TEMP/gitleaks.tar.gz"
+          tar -xzf "$RUNNER_TEMP/gitleaks.tar.gz" -C "$install_dir" gitleaks
+          chmod +x "$install_dir/gitleaks"
+
+          trufflehog_version=3.95.5
+          curl -sSfL "https://github.com/trufflesecurity/trufflehog/releases/download/v${trufflehog_version}/trufflehog_${trufflehog_version}_linux_amd64.tar.gz" \
+            -o "$RUNNER_TEMP/trufflehog.tar.gz"
+          tar -xzf "$RUNNER_TEMP/trufflehog.tar.gz" -C "$install_dir" trufflehog
+          chmod +x "$install_dir/trufflehog"
+
+          curl -sSfL "https://raw.githubusercontent.com/awslabs/git-secrets/1.3.0/git-secrets" \
+            -o "$install_dir/git-secrets"
+          chmod +x "$install_dir/git-secrets"
+
+          python3 -m pip install --user detect-secrets==1.5.0
+
+      - name: Run repository audit
+        run: scripts/audit.sh --ci

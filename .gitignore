@@ -1,0 +1,41 @@
+# macOS
+.DS_Store
+
+# Xcode user state
+*.xcuserstate
+*.xccheckout
+*.moved-aside
+*.xcscmblueprint
+xcuserdata/
+*.xcodeproj/xcuserdata/
+*.xcworkspace/xcuserdata/
+
+# Build products
+build/
+DerivedData/
+*.ipa
+*.dSYM.zip
+*.dSYM
+
+# Swift Package Manager
+.build/
+Package.resolved
+.swiftpm/xcode/xcuserdata/
+
+# Local configuration and credentials
+.env
+.env.*
+*.local
+*.xcconfig.local
+*.mobileprovision
+*.provisionprofile
+*.p12
+*.cer
+*.pem
+*.key
+*.xcconfig
+!*.xcconfig.example
+*.entitlements.local
+ExportOptions.plist
+GoogleService-Info.plist
+Secrets.plist
