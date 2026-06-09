@@ -12,7 +12,11 @@ import Foundation
 /// Thin async wrapper over `URLSession` implementing the Gotogo REST contract.
 public final class APIClient: @unchecked Sendable {
 
-    private let baseURL: URL
+    /// REST root. Mutable so the user can switch home servers before registering
+    /// (federation: you choose which server hosts your `id@domain`). Guarded by
+    /// `baseURLLock` for safe cross-task mutation.
+    private var baseURL: URL
+    private let baseURLLock = NSLock()
     private let session: URLSession
     /// Bearer token; protected by `tokenLock` for safe cross-task mutation.
     private var token: String?
@@ -59,6 +63,19 @@ public final class APIClient: @unchecked Sendable {
         return token
     }
 
+    /// Switches the REST root (the user's chosen home server). Only meaningful
+    /// before registering — once an account exists it is pinned to its server.
+    func setBaseURL(_ url: URL) {
+        baseURLLock.lock(); defer { baseURLLock.unlock() }
+        self.baseURL = url
+    }
+
+    /// The REST root currently in use.
+    public var currentBaseURL: URL {
+        baseURLLock.lock(); defer { baseURLLock.unlock() }
+        return baseURL
+    }
+
     // MARK: - Accounts
 
     func register(deviceName: String,
@@ -81,6 +98,27 @@ public final class APIClient: @unchecked Sendable {
 
     func deleteAccount() async throws {
         try await sendNoContent("/v1/accounts/me", method: "DELETE", authed: true)
+    }
+
+    // MARK: - Server discovery & usernames
+
+    /// Fetches the server's public info (its `@domain`, federation mode). Used to
+    /// validate a chosen home server and learn the home domain for `id@domain`.
+    func serverInfo() async throws -> ServerInfoResponse {
+        try await send("/v1/server", method: "GET", body: Optional<Empty>.none, authed: false)
+    }
+
+    /// Checks whether a username is available on this server (public, unauthed).
+    func usernameAvailable(_ name: String) async throws -> UsernameAvailabilityResponse {
+        try await send("/v1/usernames/\(pathID(name))/available", method: "GET",
+                       body: Optional<Empty>.none, authed: false)
+    }
+
+    /// Claims (or changes) the caller's username; returns the new `localpart@domain`
+    /// address. 409 maps to `APIError` carrying the `username_taken` code.
+    func setUsername(_ name: String) async throws -> SetUsernameResponse {
+        try await send("/v1/account/username", method: "PUT",
+                       body: SetUsernameRequest(username: name), authed: true)
     }
 
     // MARK: - Devices
@@ -390,7 +428,7 @@ public final class APIClient: @unchecked Sendable {
     }
 
     private func makeRequest(_ path: String, method: String, authed: Bool) throws -> URLRequest {
-        guard let url = URL(string: path, relativeTo: baseURL) else { throw APIError.invalidURL }
+        guard let url = URL(string: path, relativeTo: currentBaseURL) else { throw APIError.invalidURL }
         var req = URLRequest(url: url)
         req.httpMethod = method
         req.setValue("application/json", forHTTPHeaderField: "Accept")

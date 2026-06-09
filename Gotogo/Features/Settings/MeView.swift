@@ -94,27 +94,50 @@ struct MeView: View {
     private var identitySection: some View {
         Section {
             VStack(alignment: .leading, spacing: Theme.Spacing.md) {
-                Text("Your public ID")
+                Text("Your address")
                     .font(.subheadline)
                     .foregroundStyle(Theme.Palette.secondaryText)
-                HStack {
-                    CodeChip(text: appState.session?.publicId ?? "—")
+                HStack(alignment: .firstTextBaseline) {
+                    Text(shareAddress)
+                        .font(.body.monospaced())
+                        .textSelection(.enabled)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.6)
                     Spacer()
-                    if let id = appState.session?.publicId {
-                        Button { UIPasteboard.general.string = id } label: {
-                            Image(systemName: "doc.on.doc")
-                        }
-                        ShareLink(item: "Add me on Gotogo: \(id)") {
-                            Image(systemName: "square.and.arrow.up")
-                        }
+                    Button { UIPasteboard.general.string = shareAddress } label: {
+                        Image(systemName: "doc.on.doc")
+                    }
+                    ShareLink(item: "Add me on Gotogo: \(shareAddress)") {
+                        Image(systemName: "square.and.arrow.up")
                     }
                 }
-                Text("Share this ID so others can add you as a contact.")
+                Text("Share this address so others can add you — it works across servers.")
                     .font(.caption)
                     .foregroundStyle(Theme.Palette.secondaryText)
+                if appState.hasUsername, let id = appState.session?.publicId {
+                    Text("Your random ID \(id)@\(appState.homeDomain) still works too.")
+                        .font(.caption)
+                        .foregroundStyle(Theme.Palette.secondaryText)
+                }
             }
             .padding(.vertical, Theme.Spacing.xs)
+
+            NavigationLink {
+                UsernameEditorView()
+            } label: {
+                Label(appState.hasUsername ? "Change username" : "Choose a username",
+                      systemImage: "at")
+            }
+        } header: {
+            Text("Address")
+        } footer: {
+            Text("A username is optional — without one your address uses a random ID.")
         }
+    }
+
+    /// The address to share: the chosen `username@domain`, else `id@domain`.
+    private var shareAddress: String {
+        appState.myAddress ?? appState.session?.publicId ?? "—"
     }
 
     private var safetySection: some View {

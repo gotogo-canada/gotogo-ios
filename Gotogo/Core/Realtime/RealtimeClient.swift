@@ -27,7 +27,10 @@ public final class RealtimeClient {
         let message: InboundMessage?
     }
 
-    private let baseURL: URL
+    /// WebSocket root. Mutable so the user can switch home servers before
+    /// registering (mirrors `APIClient.setBaseURL`). All state is main-actor
+    /// isolated, so no extra locking is needed.
+    private var baseURL: URL
     private let session: URLSession
     private let decoder: JSONDecoder
 
@@ -49,6 +52,12 @@ public final class RealtimeClient {
                                                    debugDescription: "Unparseable date: \(raw)")
         }
         self.decoder = dec
+    }
+
+    /// Switches the WebSocket root (the user's chosen home server). Only meaningful
+    /// before a connection is opened (i.e. before registering).
+    func setBaseURL(_ url: URL) {
+        self.baseURL = url
     }
 
     /// Opens the socket for `token` and returns a stream of inbound messages.

@@ -207,6 +207,26 @@ public final class AuthService {
         return session
     }
 
+    // MARK: - Username
+
+    /// Checks whether a username is available on the home server (public call).
+    func checkUsername(_ name: String) async throws -> UsernameAvailabilityResponse {
+        try await api.usernameAvailable(name)
+    }
+
+    /// Claims (or changes) the account's username and returns the new
+    /// `localpart@domain` address. Updates the persisted session's username so the
+    /// app shows the federated address after relaunch.
+    @discardableResult
+    func claimUsername(_ name: String) async throws -> String {
+        let resp = try await api.setUsername(name)
+        if var session = store.loadSession() {
+            session.username = Address(resp.address)?.localpart ?? name.lowercased()
+            try store.saveSession(session)
+        }
+        return resp.address
+    }
+
     // MARK: - Device linking
 
     /// PRIMARY device: registers a NEW device for THIS account on the server and

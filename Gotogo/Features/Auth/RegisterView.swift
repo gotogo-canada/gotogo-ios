@@ -13,6 +13,7 @@ struct RegisterView: View {
     @State private var model: RegisterViewModel?
     @State private var showRecovery = false
     @State private var showLink = false
+    @State private var showServer = false
 
     var body: some View {
         NavigationStack {
@@ -25,17 +26,40 @@ struct RegisterView: View {
                 } else {
                     ProgressView().frame(height: 44)
                 }
+                serverFooter
             }
             .padding(Theme.Spacing.xl)
-            .modifier(RegisterFlowModifiers(model: model, showRecovery: $showRecovery,
+            .modifier(RegisterFlowModifiers(model: model, homeDomain: appState.homeDomain,
+                                            showRecovery: $showRecovery,
                                             onAdopt: { appState.adopt($0) }))
             .sheet(isPresented: $showLink) {
                 LinkAdoptView { showLink = false }
+            }
+            .sheet(isPresented: $showServer) {
+                ServerSelectView()
             }
         }
         .task {
             if model == nil { model = RegisterViewModel(auth: appState.auth) }
         }
+    }
+
+    /// Shows the chosen home server with a Change action (federation: pick where
+    /// your account lives before creating it).
+    private var serverFooter: some View {
+        Button {
+            showServer = true
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: "server.rack")
+                Text("Server: \(appState.homeDomain)")
+                Text("·").foregroundStyle(Theme.Palette.secondaryText)
+                Text("Change").fontWeight(.semibold)
+            }
+            .font(.footnote)
+            .foregroundStyle(Theme.Palette.secondaryText)
+        }
+        .disabled(model?.isWorking ?? false)
     }
 
     private var brand: some View {
@@ -85,14 +109,15 @@ struct RegisterView: View {
 /// model (during first-frame initialization).
 private struct RegisterFlowModifiers: ViewModifier {
     let model: RegisterViewModel?
+    let homeDomain: String
     @Binding var showRecovery: Bool
     let onAdopt: (Session) -> Void
 
     func body(content: Content) -> some View {
         content
-            .navigationDestination(isPresented: phraseBinding) {
-                if let model, case .showPhrase(let words) = model.phase {
-                    RecoveryPhraseView(words: words) {
+            .navigationDestination(isPresented: registeredBinding) {
+                if let model, model.phase == .registered {
+                    PostCreateView(model: model, domain: homeDomain) {
                         if let session = model.pendingSession { onAdopt(session) }
                     }
                 }
@@ -112,9 +137,9 @@ private struct RegisterFlowModifiers: ViewModifier {
             }
     }
 
-    private var phraseBinding: Binding<Bool> {
+    private var registeredBinding: Binding<Bool> {
         Binding(
-            get: { if let model, case .showPhrase = model.phase { return true } else { return false } },
+            get: { if let model, model.phase == .registered { return true } else { return false } },
             set: { newValue in if !newValue { model?.reset() } }
         )
     }

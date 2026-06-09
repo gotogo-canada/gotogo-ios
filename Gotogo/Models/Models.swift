@@ -20,13 +20,19 @@ public struct Session: Codable, Sendable, Equatable {
     public var token: String
     /// Display name chosen for this device.
     public var deviceName: String
+    /// User-chosen username (folded, lowercase) once claimed; nil means the address
+    /// uses the server-assigned random `publicId`. Optional so older persisted
+    /// sessions decode unchanged. This is the `localpart` of the federated address.
+    public var username: String?
 
-    public init(publicId: String, accountId: String, deviceId: String, token: String, deviceName: String) {
+    public init(publicId: String, accountId: String, deviceId: String, token: String,
+                deviceName: String, username: String? = nil) {
         self.publicId = publicId
         self.accountId = accountId
         self.deviceId = deviceId
         self.token = token
         self.deviceName = deviceName
+        self.username = username
     }
 }
 

@@ -40,6 +40,10 @@ final class AppState {
     /// Decrypted group list for the Groups tab, refreshed from the backend.
     private(set) var groups: [GroupInfo] = []
 
+    /// This account's home domain (the `@domain` of `id@domain`). Authoritative
+    /// once fetched from the chosen server's `GET /v1/server`.
+    private(set) var homeDomain: String
+
     /// The core services. Exposed so view models can call them.
     let auth: AuthService
     let messaging: MessagingService
@@ -55,15 +59,27 @@ final class AppState {
     /// The shared crypto engine (used for safety numbers in the UI).
     private let engine: CryptoEngine
     private let secretStore: SecretStoring
+    /// API + realtime clients, kept so the home server can be switched (their base
+    /// URLs are mutable) before registration.
+    private let api: APIClient
+    private let realtime: RealtimeClient
+    /// Persists the chosen home server across launches.
+    private let serverStore: ServerStore
 
     init() {
         let engine = CryptoKitEngine()
-        let api = APIClient(baseURL: AppEnvironment.current.apiBaseURL)
+        let serverStore = ServerStore()
+        let server = serverStore.loadOrDefault()
+        let api = APIClient(baseURL: server.apiBaseURL)
         let store = KeychainSecretStore()
-        let realtime = RealtimeClient(baseURL: AppEnvironment.current.webSocketBaseURL)
+        let realtime = RealtimeClient(baseURL: server.webSocketBaseURL)
 
         self.engine = engine
         self.secretStore = store
+        self.api = api
+        self.realtime = realtime
+        self.serverStore = serverStore
+        self.homeDomain = server.domain
         self.auth = AuthService(api: api, engine: engine, store: store)
         let messaging = MessagingService(api: api, engine: engine, store: store, realtime: realtime)
         self.messaging = messaging
@@ -192,6 +208,7 @@ final class AppState {
     func startMessagingFeed() async {
         guard isRegistered else { return }
         conversations = messaging.allConversations()
+        await refreshHomeDomain()
         await refreshContacts()
         await refreshBlocks()
         await syncNow()
@@ -335,5 +352,106 @@ final class AppState {
     func safetyNumber(withRemoteIdentity remote: Data) -> String? {
         guard let identity = secretStore.loadIdentity() else { return nil }
         return engine.safetyNumber(localIdentity: identity.publicKey, remoteIdentity: remote)
+    }
+
+    // MARK: - Home server & username (federated id@domain)
+
+    /// Errors from server selection / username claiming.
+    enum AddressError: LocalizedError {
+        case alreadyRegistered
+        case invalidServer
+        case unreachableServer
+
+        var errorDescription: String? {
+            switch self {
+            case .alreadyRegistered:
+                return "You can only change servers before creating an account."
+            case .invalidServer:
+                return "Enter a valid server address (e.g. gotogo.ca or http://localhost:8080)."
+            case .unreachableServer:
+                return "Couldn't reach a Gotogo server there. Check the address and try again."
+            }
+        }
+    }
+
+    /// The currently selected home server.
+    func currentServer() -> ServerConfig { serverStore.loadOrDefault() }
+
+    /// This account's full federated address, `username@domain` (or `id@domain`
+    /// when no username is claimed). nil until registered.
+    var myAddress: String? {
+        guard let session else { return nil }
+        let localpart = session.username ?? session.publicId
+        return "\(localpart)@\(homeDomain)"
+    }
+
+    /// Whether the user has claimed a username (vs. the random id).
+    var hasUsername: Bool { (session?.username?.isEmpty == false) }
+
+    /// Validates and selects a home server (only before registering). Fetches
+    /// `GET /v1/server` to confirm it's a Gotogo server and learn the authoritative
+    /// `@domain`, persists the choice, and repoints the API + realtime clients.
+    @discardableResult
+    func selectServer(input: String) async throws -> ServerConfig {
+        guard !isRegistered else { throw AddressError.alreadyRegistered }
+        guard var candidate = ServerStore.candidate(from: input) else { throw AddressError.invalidServer }
+
+        let previous = serverStore.loadOrDefault()
+        api.setBaseURL(candidate.apiBaseURL)
+        do {
+            let info = try await api.serverInfo()
+            if !info.domain.isEmpty { candidate.domain = info.domain }
+            candidate.name = info.name
+        } catch {
+            api.setBaseURL(previous.apiBaseURL) // revert on failure
+            throw AddressError.unreachableServer
+        }
+        realtime.setBaseURL(candidate.webSocketBaseURL)
+        serverStore.save(candidate)
+        homeDomain = candidate.domain
+        return candidate
+    }
+
+    /// Checks whether a username is free on the home server.
+    func checkUsername(_ name: String) async throws -> UsernameAvailabilityResponse {
+        try await auth.checkUsername(name)
+    }
+
+    /// Claims (or changes) the username, updating the session + home domain.
+    func claimUsername(_ name: String) async throws {
+        let address = try await auth.claimUsername(name)
+        guard var updated = session else { return }
+        if let parsed = Address(address) {
+            updated.username = parsed.localpart
+            setHomeDomain(parsed.domain) // persist so it survives a restart
+        } else {
+            // The server returned an unparseable address; keep the folded name and
+            // leave homeDomain as the already-authoritative value.
+            updated.username = name.lowercased()
+        }
+        session = updated
+        profileStore.loadOwn(publicId: updated.publicId)
+    }
+
+    /// Best-effort: refreshes the authoritative home domain from the server (called
+    /// on entry so an account created before a username still shows `id@domain`).
+    func refreshHomeDomain() async {
+        guard isRegistered else { return }
+        if let info = try? await api.serverInfo(), !info.domain.isEmpty {
+            setHomeDomain(info.domain, name: info.name)
+        }
+    }
+
+    /// Updates the published home domain AND persists it to `ServerStore`, so the
+    /// authoritative `@domain` survives an app restart (not just held in memory).
+    private func setHomeDomain(_ domain: String, name: String? = nil) {
+        guard !domain.isEmpty else { return }
+        homeDomain = domain
+        var cfg = serverStore.loadOrDefault()
+        if cfg.domain != domain || (name != nil && cfg.name != name) {
+            cfg.domain = domain
+            if let name { cfg.name = name }
+            serverStore.save(cfg)
+        }
     }
 }

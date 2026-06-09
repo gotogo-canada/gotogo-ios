@@ -24,6 +24,30 @@ struct AccountCredentials: Decodable {
     let token: String
 }
 
+/// `GET /v1/server` — public server info used to validate a chosen home server
+/// and learn the home `@domain` for `id@domain` addressing.
+struct ServerInfoResponse: Decodable {
+    let domain: String
+    let name: String?
+    let federationMode: String?
+    let federated: Bool?
+}
+
+/// `GET /v1/usernames/{name}/available` — username availability check.
+struct UsernameAvailabilityResponse: Decodable {
+    let available: Bool
+    let reason: String?
+}
+
+/// `PUT /v1/account/username` request + response.
+struct SetUsernameRequest: Encodable {
+    let username: String
+}
+struct SetUsernameResponse: Decodable {
+    /// The new `localpart@domain` address the server assigned.
+    let address: String
+}
+
 struct RecoverStartRequest: Encodable {
     let publicId: String
 }
