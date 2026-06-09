@@ -73,15 +73,17 @@ final class RegisterViewModel {
         pendingSession?.username = Address(address)?.localpart ?? name.lowercased()
     }
 
-    /// Recovers an existing account from a public id + 24-word phrase.
+    /// Recovers an existing account from an identifier + 24-word phrase. The
+    /// identifier may be the random public id, a chosen username, or a full
+    /// address (the backend resolves all three).
     /// On success, `pendingSession` is set and `onComplete` is invoked.
     func recover(onComplete: (Session) -> Void) async {
         let words = recoveryPhraseInput
             .split(whereSeparator: { $0 == " " || $0.isNewline })
             .map(String.init)
-        let publicId = recoveryPublicId.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+        let publicId = Self.normalizedRecoveryID(recoveryPublicId)
         guard !publicId.isEmpty else {
-            phase = .failed("Enter your public ID.")
+            phase = .failed("Enter your public ID or username.")
             return
         }
         guard words.count == 24 else {
@@ -100,6 +102,17 @@ final class RegisterViewModel {
 
     /// Resets a failure back to idle so the user can retry.
     func reset() { phase = .idle }
+
+    /// Normalizes the recovery identifier: random ids are uppercased (they are
+    /// stored uppercase), usernames/addresses are lowercased (they are folded).
+    static func normalizedRecoveryID(_ raw: String) -> String {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        let isRandomID = trimmed.count == 8 && trimmed.allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber) } && trimmed.contains(where: \.isNumber)
+        if isRandomID { return trimmed.uppercased() }
+        // A username, or a full address — uppercase random ids inside an address
+        // are handled server-side; fold the rest.
+        return trimmed.lowercased()
+    }
 
     private static func message(for error: Error) -> String {
         if let local = error as? LocalizedError, let desc = local.errorDescription {

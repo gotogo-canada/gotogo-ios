@@ -89,14 +89,17 @@ public final class ProfileService {
     func setProfile(displayName: String,
                     photo: Data?,
                     sensitive: Bool,
-                    mutualContacts: [String]) async throws {
+                    mutualContacts: [String],
+                    sealedSenderEnabled: Bool = true) async throws {
         guard store.loadSession() != nil else { throw ProfileError.notSignedIn }
 
         // 1. Clean + downscale the photo before it is ever encrypted.
         let photoJPEG = Self.processPhoto(photo)
         // Share the sealed-sender access key with mutual contacts through this
         // E2EE profile (V2-C): only they decrypt it, so only they can send sealed.
-        let sealedKey = store.sealedSenderAccessKey()
+        // Honour the user's preference — when sealed sender is off we neither
+        // embed the key in the profile nor register it server-side.
+        let sealedKey = sealedSenderEnabled ? store.sealedSenderAccessKey() : nil
         let profile = Profile(displayName: displayName, photoJPEG: photoJPEG, sealedSenderKey: sealedKey)
 
         // 2. Random per-profile AES-256 key; AES-GCM-seal the encoded profile.
@@ -115,8 +118,13 @@ public final class ProfileService {
         //    the owner fetch its own profile back).
         _ = try await api.putProfile(PutProfileRequest(encryptedProfile: encryptedProfile,
                                                        grants: grants))
-        // Register the access key so the server can gate sealed deliveries to us.
-        if let sealedKey { _ = try? await api.setSealedSenderKey(sealedKey) }
+        // Register or withdraw the access key so the server gates (or stops
+        // gating) sealed deliveries to us, matching the user's preference.
+        if let sealedKey {
+            _ = try? await api.setSealedSenderKey(sealedKey)
+        } else {
+            try? await api.clearSealedSenderKey()
+        }
         try store.saveOwnProfile(OwnProfileRecord(profileKey: profileKeyData,
                                                   profile: profile,
                                                   sensitive: sensitive))

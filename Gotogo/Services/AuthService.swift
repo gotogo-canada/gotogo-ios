@@ -227,6 +227,30 @@ public final class AuthService {
         return resp.address
     }
 
+    // MARK: - Account portability
+
+    /// The exact bytes the backend's move attestation verifies
+    /// (`account.moveCanonical`): a fixed prefix + from/to addresses + timestamp.
+    nonisolated static func moveCanonical(fromAddress: String, toAddress: String, signedAt: Int64) -> Data {
+        Data("gotogo-account-move-v1\n\(fromAddress)\n\(toAddress)\n\(signedAt)".utf8)
+    }
+
+    /// Moves this account to another server (account portability): signs the move
+    /// statement with the RECOVERY key (derived from the 24-word phrase — proof
+    /// the account owner, not just a stolen device token, authorized it), then
+    /// tombstones the account here with a forwarding pointer contacts can verify.
+    /// `fromAddress` must be the canonical `publicId@homeDomain`.
+    func moveAccount(fromAddress: String, toAddress: String, phrase: [String]) async throws -> String {
+        let entropy = try Mnemonic.decode(phrase)
+        let derived = try Self.deriveRecovery(from: entropy)
+        let signingKey = try Curve25519.Signing.PrivateKey(rawRepresentation: derived.recoverySeed)
+        let signedAt = Int64(Date().timeIntervalSince1970)
+        let signature = try signingKey.signature(
+            for: Self.moveCanonical(fromAddress: fromAddress, toAddress: toAddress, signedAt: signedAt))
+        let resp = try await api.moveAccount(toAddress: toAddress, signature: signature, signedAt: signedAt)
+        return resp.movedTo
+    }
+
     // MARK: - Device linking
 
     /// PRIMARY device: registers a NEW device for THIS account on the server and

@@ -18,14 +18,14 @@ struct RecoveryView: View {
         NavigationStack {
             Form {
                 Section {
-                    TextField("Public ID (e.g. 91JLGNSJ)", text: $model.recoveryPublicId)
-                        .textInputAutocapitalization(.characters)
+                    TextField("91JLGNSJ or alice", text: $model.recoveryPublicId)
+                        .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
                         .font(.body.monospaced())
                 } header: {
-                    Text("Your public ID")
+                    Text("Your ID or username")
                 } footer: {
-                    Text("The 8-character ID you were shown when you created the account.")
+                    Text("Your 8-character ID, your username, or your full address (alice@server).")
                 }
 
                 Section {

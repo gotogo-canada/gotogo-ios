@@ -65,6 +65,8 @@ final class AppState {
     private let realtime: RealtimeClient
     /// Persists the chosen home server across launches.
     private let serverStore: ServerStore
+    /// Persists the sealed-sender on/off preference.
+    private let sealedSenderSettings = SealedSenderSettings()
 
     init() {
         let engine = CryptoKitEngine()
@@ -331,11 +333,37 @@ final class AppState {
         try await profiles.setProfile(displayName: displayName,
                                       photo: photo,
                                       sensitive: sensitive,
-                                      mutualContacts: mutualIds)
+                                      mutualContacts: mutualIds,
+                                      sealedSenderEnabled: sealedSenderEnabled)
         if let id = session?.publicId { profileStore.loadOwn(publicId: id) }
         // Ping each mutual contact so they re-fetch my new profile automatically
         // (like a message arriving), rather than only after their next relaunch.
         await messaging.broadcastProfileUpdate(to: mutualIds)
+    }
+
+    // MARK: - Sealed sender preference (V2-C)
+
+    /// Whether sealed sender is enabled (hides the sender from the recipient's
+    /// server). On by default.
+    var sealedSenderEnabled: Bool { sealedSenderSettings.enabled }
+
+    /// Turns sealed sender on or off. Enabling re-publishes the access key (so
+    /// contacts can send sealed to us); disabling withdraws it server-side and
+    /// re-publishes the profile without it.
+    func setSealedSenderEnabled(_ enabled: Bool) async throws {
+        sealedSenderSettings.enabled = enabled
+        if enabled {
+            if let key = secretStore.sealedSenderAccessKey() {
+                _ = try await api.setSealedSenderKey(key)
+            }
+        } else {
+            try await api.clearSealedSenderKey()
+        }
+        // Re-publish the profile so the embedded key (or its absence) matches.
+        let own = profileStore.profile(for: session?.publicId ?? "")
+        try? await saveProfile(displayName: own?.displayName ?? "",
+                               photo: own?.image?.jpegData(compressionQuality: 0.9),
+                               sensitive: profiles.ownProfileIsSensitive())
     }
 
     /// The local identity's safety number (self vs self) for display in Settings.
@@ -431,6 +459,16 @@ final class AppState {
         }
         session = updated
         profileStore.loadOwn(publicId: updated.publicId)
+    }
+
+    /// Moves this account to `toAddress` on another server, signing the move with
+    /// the recovery phrase (account portability). Returns the forwarded address.
+    func moveAccount(toAddress: String, phrase: [String]) async throws -> String {
+        guard let session else { throw AuthError.noSession }
+        // The attestation binds the CANONICAL from-address (publicId@domain) —
+        // exactly what the backend signs against.
+        let fromAddress = "\(session.publicId)@\(homeDomain)"
+        return try await auth.moveAccount(fromAddress: fromAddress, toAddress: toAddress, phrase: phrase)
     }
 
     /// Best-effort: refreshes the authoritative home domain from the server (called

@@ -48,6 +48,20 @@ struct SetUsernameResponse: Decodable {
     let address: String
 }
 
+/// `POST /v1/account/move` — tombstone this account with a forwarding pointer
+/// to its new home server (account portability). The optional signature is an
+/// Ed25519 recovery-key attestation over the move statement, which contacts
+/// verify so a server can't forge a move.
+struct MoveAccountRequest: Encodable {
+    let toAddress: String
+    let signature: Data?
+    let signedAt: Int64
+}
+struct MoveAccountResponse: Decodable {
+    let moved: Bool
+    let movedTo: String
+}
+
 struct RecoverStartRequest: Encodable {
     let publicId: String
 }

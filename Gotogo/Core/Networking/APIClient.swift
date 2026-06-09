@@ -121,6 +121,15 @@ public final class APIClient: @unchecked Sendable {
                        body: SetUsernameRequest(username: name), authed: true)
     }
 
+    /// Moves this account to another server: tombstones it here with a forwarding
+    /// pointer (account portability), optionally carrying a recovery-key signed
+    /// attestation that contacts can verify.
+    func moveAccount(toAddress: String, signature: Data?, signedAt: Int64) async throws -> MoveAccountResponse {
+        try await send("/v1/account/move", method: "POST",
+                       body: MoveAccountRequest(toAddress: toAddress, signature: signature, signedAt: signedAt),
+                       authed: true)
+    }
+
     // MARK: - Devices
 
     /// Provisions an additional device on the current account, returning its own
@@ -304,6 +313,15 @@ public final class APIClient: @unchecked Sendable {
         let r: Resp = try await send("/v1/account/sealed-sender-key", method: "PUT",
                                      body: Body(accessKey: accessKey), authed: true)
         return r.published
+    }
+
+    /// Withdraws a previously-published sealed-sender access key (disables sealed
+    /// receiving), so the server stops accepting sealed deliveries for this account.
+    func clearSealedSenderKey() async throws {
+        struct Body: Encodable { let clear: Bool }
+        struct Resp: Decodable { let published: Bool }
+        let _: Resp = try await send("/v1/account/sealed-sender-key", method: "PUT",
+                                     body: Body(clear: true), authed: true)
     }
 
     /// Sends a sealed (sender-anonymous) message using the recipient's access key

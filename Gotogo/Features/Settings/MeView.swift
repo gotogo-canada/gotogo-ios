@@ -27,6 +27,7 @@ struct MeView: View {
                 identitySection
                 safetySection
                 blockedSection
+                privacySection
                 realtimeSection
                 deviceSection
                 dangerSection
@@ -195,6 +196,36 @@ struct MeView: View {
 
     private var blockedSorted: [String] { appState.blockedIds.sorted() }
 
+    @State private var sealedWorking = false
+
+    private var privacySection: some View {
+        Section {
+            Toggle(isOn: Binding(
+                get: { appState.sealedSenderEnabled },
+                set: { newValue in
+                    sealedWorking = true
+                    Task {
+                        do { try await appState.setSealedSenderEnabled(newValue) }
+                        catch { errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription }
+                        sealedWorking = false
+                    }
+                }
+            )) {
+                HStack {
+                    Label("Sealed sender", systemImage: "eye.slash")
+                    if sealedWorking { Spacer(); ProgressView() }
+                }
+            }
+            .disabled(sealedWorking)
+        } header: {
+            Text("Privacy")
+        } footer: {
+            Text(appState.sealedSenderEnabled
+                 ? "Your contacts' servers don't learn it's you sending — your identity travels encrypted inside the message. Turn off to send normally."
+                 : "Off: your messages carry your address to recipients' servers as usual.")
+        }
+    }
+
     private var realtimeSection: some View {
         Section("Connection") {
             HStack {
@@ -221,6 +252,11 @@ struct MeView: View {
                 CryptoDiagnosticsView()
             } label: {
                 Label("Crypto diagnostics", systemImage: "checkmark.seal")
+            }
+            NavigationLink {
+                MoveAccountView()
+            } label: {
+                Label("Move to another server", systemImage: "arrow.right.arrow.left.circle")
             }
         } header: {
             Text("Devices & security")
