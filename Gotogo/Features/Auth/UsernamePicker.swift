@@ -34,6 +34,9 @@ struct UsernamePicker: View {
         case checking
         case available
         case taken
+        /// The availability check itself failed (offline, outdated server…):
+        /// we don't know. Claiming stays enabled so the real error surfaces.
+        case unknown
     }
 
     var body: some View {
@@ -89,6 +92,10 @@ struct UsernamePicker: View {
         case .taken:
             Label("@\(folded) is taken", systemImage: "xmark.circle.fill")
                 .font(.footnote).foregroundStyle(Theme.Palette.destructive)
+        case .unknown:
+            Label("Couldn't check availability — you can still try to claim.",
+                  systemImage: "questionmark.circle")
+                .font(.footnote).foregroundStyle(Theme.Palette.secondaryText)
         }
     }
 
@@ -104,10 +111,10 @@ struct UsernamePicker: View {
                         .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous))
                 } else {
                     Text("Claim @\(folded.isEmpty ? "username" : folded)")
-                        .primaryButtonStyle(enabled: status == .available && !working)
+                        .primaryButtonStyle(enabled: claimEnabled && !working)
                 }
             }
-            .disabled(status != .available || working)
+            .disabled(!claimEnabled || working)
 
             if allowSkip {
                 Button("Skip for now") { onFinish() }
@@ -119,6 +126,12 @@ struct UsernamePicker: View {
     }
 
     // MARK: - Logic
+
+    /// Claiming is allowed when the name is available — or when availability is
+    /// simply unknown (the claim itself then surfaces the authoritative answer).
+    private var claimEnabled: Bool {
+        status == .available || status == .unknown
+    }
 
     /// The folded (lowercased, trimmed) form sent to the server.
     private var folded: String {
@@ -150,7 +163,7 @@ struct UsernamePicker: View {
         switch available {
         case .some(true):  status = .available
         case .some(false): status = .taken
-        case .none:        status = .available // unknown: let the claim surface errors
+        case .none:        status = .unknown // check failed: say so, don't guess
         }
     }
 
@@ -164,7 +177,21 @@ struct UsernamePicker: View {
             onFinish()
         } catch {
             working = false
-            status = .taken
+            // Only mark "taken" when the server actually said so — any other
+            // failure (outdated server, network…) must not masquerade as taken.
+            if case APIError.server(let httpStatus, let code, _) = error {
+                switch (httpStatus, code) {
+                case (409, _), (_, .some("username_taken")):
+                    status = .taken
+                    errorMessage = nil
+                    return
+                case (404, _):
+                    errorMessage = "This server doesn't support usernames yet — it needs to be updated to the latest Gotogo version."
+                    return
+                default:
+                    break
+                }
+            }
             errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
         }
     }
