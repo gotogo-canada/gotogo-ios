@@ -17,9 +17,14 @@ public struct Profile: Codable, Sendable, Equatable {
     public var displayName: String
     /// Optional profile photo as JPEG bytes (metadata-stripped + downscaled).
     public var photoJPEG: Data?
+    /// The owner's sealed-sender access key, shared with mutual contacts through
+    /// this E2EE profile so they can send sealed (sender-anonymous) messages
+    /// (V2-C). Only mutual contacts decrypt the profile, so only they learn it.
+    public var sealedSenderKey: Data?
 
-    public init(displayName: String, photoJPEG: Data? = nil) {
+    public init(displayName: String, photoJPEG: Data? = nil, sealedSenderKey: Data? = nil) {
         self.displayName = displayName
         self.photoJPEG = photoJPEG
+        self.sealedSenderKey = sealedSenderKey
     }
 }

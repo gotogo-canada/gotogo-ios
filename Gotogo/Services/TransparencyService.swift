@@ -46,10 +46,14 @@ public struct TransparencyStatus: Sendable, Equatable {
 public enum TransparencyError: Error, Sendable, LocalizedError {
     /// The account has no entries in the transparency log (never published prekeys).
     case noEntries
+    /// A remote contact's server-signed transparency head failed signature
+    /// verification against that domain's pinned transparency key.
+    case headSignatureInvalid
 
     public var errorDescription: String? {
         switch self {
         case .noEntries: return "This account has not published any identity keys yet."
+        case .headSignatureInvalid: return "The contact server's transparency head did not verify."
         }
     }
 }
@@ -65,11 +69,15 @@ public final class TransparencyService {
     private let api: APIClient
     private let engine: CryptoEngine
     private let store: SecretStoring
+    /// Resolves + verifies remote contacts' server-signed heads. nil on a
+    /// single-server build (then only local, bare-localpart ids are verifiable).
+    private let directory: FederationDirectory?
 
-    init(api: APIClient, engine: CryptoEngine, store: SecretStoring) {
+    init(api: APIClient, engine: CryptoEngine, store: SecretStoring, directory: FederationDirectory? = nil) {
         self.api = api
         self.engine = engine
         self.store = store
+        self.directory = directory
     }
 
     /// Verifies the most-recently-published identity key for `publicId` against the
@@ -92,6 +100,24 @@ public final class TransparencyService {
             throw TransparencyError.noEntries
         }
 
+        // The transparency leaf binds the BARE localpart (the backend stores
+        // public_id = localpart). For a remote contact `localpart@domain`, split it:
+        // the leaf hash uses the localpart, while pins/sessions key by the full id.
+        let atParts = publicId.split(separator: "@", maxSplits: 1)
+        let localpart = String(atParts.first ?? Substring(publicId))
+        let domain = atParts.count == 2 ? String(atParts[1]) : ""
+
+        // Remote contact: verify the contact server's signed head against its
+        // TOFU-pinned transparency key BEFORE trusting any inclusion proof, so a
+        // relaying server cannot forge a remote contact's key history.
+        if let signedHead = log.signedHead {
+            guard let directory, await directory.verify(head: signedHead, domain: domain) else {
+                throw TransparencyError.headSignatureInvalid
+            }
+        }
+        let effTreeSize = log.effectiveTreeSize
+        let effRoot = log.effectiveRoot
+
         // Verify EVERY entry's leaf hash + inclusion proof against the response's
         // signed tree head. The headline status uses the newest entry (max seq),
         // which is the identity key a sender would actually use today.
@@ -101,17 +127,17 @@ public final class TransparencyService {
             // 1. Recompute the leaf hash and require it to match what the server
             //    committed to — guards against a server swapping the identity key
             //    while keeping a valid-looking proof for a different leaf.
-            let recomputedLeaf = MerkleVerifier.leafHash(publicId: publicId,
+            let recomputedLeaf = MerkleVerifier.leafHash(publicId: localpart,
                                                          deviceId: entry.deviceId,
                                                          identityKey: entry.identityKey)
             let leafMatches = recomputedLeaf == entry.leafHash
 
-            // 2. Verify the RFC 6962 inclusion proof against the signed root.
+            // 2. Verify the RFC 6962 inclusion proof against the (verified) root.
             let proofValid = MerkleVerifier.verifyInclusion(leafHash: entry.leafHash,
                                                             index: entry.leafIndex,
-                                                            treeSize: log.treeSize,
+                                                            treeSize: effTreeSize,
                                                             path: entry.auditPath,
-                                                            root: log.rootHash)
+                                                            root: effRoot)
             let included = leafMatches && proofValid
 
             // 3. Trust-on-first-use / key-change detection, per (publicId, deviceId).

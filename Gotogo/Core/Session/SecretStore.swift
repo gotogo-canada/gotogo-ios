@@ -52,6 +52,10 @@ public protocol SecretStoring: Sendable {
     /// ciphertext stays readable. Survives `clear()` so a re-login can still decrypt
     /// any caches left behind (they are removed separately on logout).
     func cacheKey() -> Data?
+    /// The owner's sealed-sender access key (32 bytes, device-only, stable),
+    /// shared with mutual contacts via the E2EE profile so they can send sealed
+    /// (sender-anonymous) messages (V2-C). Generated once on first use.
+    func sealedSenderAccessKey() -> Data?
     /// Removes all persisted secrets (logout / account deletion).
     func clear() throws
 }
@@ -69,6 +73,8 @@ public struct KeychainSecretStore: SecretStoring {
         static let lastSeenKeys = "gotogo.lastseenkeys"
         /// 32-byte AES-GCM key sealing the on-disk caches (device-only accessibility).
         static let cacheKey = "gotogo.cachekey"
+        /// 32-byte sealed-sender access key, shared with contacts via the profile.
+        static let sealedSenderKey = "gotogo.sealedsenderkey"
     }
 
     /// The composite map key for a peer device's last-seen identity key.
@@ -111,6 +117,10 @@ public struct KeychainSecretStore: SecretStoring {
         try? keychain.getOrCreateCacheKey(Key.cacheKey)
     }
 
+    public func sealedSenderAccessKey() -> Data? {
+        try? keychain.getOrCreateCacheKey(Key.sealedSenderKey)
+    }
+
     public func clear() throws {
         try keychain.delete(Key.session)
         try keychain.delete(Key.identity)
@@ -141,6 +151,7 @@ public final class InMemorySecretStore: SecretStoring, @unchecked Sendable {
     private var ownProfile: OwnProfileRecord?
     private var lastSeenKeys: [String: Data] = [:]
     private var cacheKeyData: Data?
+    private var sealedKeyData: Data?
 
     public init() {}
 
@@ -165,6 +176,16 @@ public final class InMemorySecretStore: SecretStoring, @unchecked Sendable {
             _ = SecRandomCopyBytes(kSecRandomDefault, 32, &bytes)
             let key = Data(bytes)
             cacheKeyData = key
+            return key
+        }
+    }
+    public func sealedSenderAccessKey() -> Data? {
+        sync {
+            if let existing = sealedKeyData { return existing }
+            var bytes = [UInt8](repeating: 0, count: 32)
+            _ = SecRandomCopyBytes(kSecRandomDefault, 32, &bytes)
+            let key = Data(bytes)
+            sealedKeyData = key
             return key
         }
     }

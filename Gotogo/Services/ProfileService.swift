@@ -94,7 +94,10 @@ public final class ProfileService {
 
         // 1. Clean + downscale the photo before it is ever encrypted.
         let photoJPEG = Self.processPhoto(photo)
-        let profile = Profile(displayName: displayName, photoJPEG: photoJPEG)
+        // Share the sealed-sender access key with mutual contacts through this
+        // E2EE profile (V2-C): only they decrypt it, so only they can send sealed.
+        let sealedKey = store.sealedSenderAccessKey()
+        let profile = Profile(displayName: displayName, photoJPEG: photoJPEG, sealedSenderKey: sealedKey)
 
         // 2. Random per-profile AES-256 key; AES-GCM-seal the encoded profile.
         let profileKey = SymmetricKey(size: .bits256)
@@ -112,6 +115,8 @@ public final class ProfileService {
         //    the owner fetch its own profile back).
         _ = try await api.putProfile(PutProfileRequest(encryptedProfile: encryptedProfile,
                                                        grants: grants))
+        // Register the access key so the server can gate sealed deliveries to us.
+        if let sealedKey { _ = try? await api.setSealedSenderKey(sealedKey) }
         try store.saveOwnProfile(OwnProfileRecord(profileKey: profileKeyData,
                                                   profile: profile,
                                                   sensitive: sensitive))

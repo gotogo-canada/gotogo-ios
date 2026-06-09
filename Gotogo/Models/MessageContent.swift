@@ -69,6 +69,12 @@ public struct MessageContent: Codable, Sendable, Equatable {
     /// keeping every device's history consistent. Nil on ordinary peer messages.
     public var syncPeer: String?
 
+    /// On a SEALED (sender-anonymous) message the sender's address travels here,
+    /// inside the E2EE content, because the recipient's server stores no sender
+    /// (V2-C). The recipient routes the conversation by this and applies
+    /// client-side blocking against it.
+    public var sealedSender: String?
+
     // MARK: MLS group control fields (RFC 9420; the live group transport)
 
     /// An MLS Welcome that admits me to a group. Present on `"group_mls_welcome"`;
@@ -130,7 +136,8 @@ public struct MessageContent: Codable, Sendable, Equatable {
                 commitSeq: Int? = nil,
                 ownDeviceIds: [String]? = nil,
                 clientId: String? = nil,
-                deleteIds: [String]? = nil) {
+                deleteIds: [String]? = nil,
+                sealedSender: String? = nil) {
         self.type = type
         self.text = text
         self.media = media
@@ -152,6 +159,7 @@ public struct MessageContent: Codable, Sendable, Equatable {
         self.ownDeviceIds = ownDeviceIds
         self.clientId = clientId
         self.deleteIds = deleteIds
+        self.sealedSender = sealedSender
     }
 
     // MARK: Convenience constructors

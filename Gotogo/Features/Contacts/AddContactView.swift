@@ -26,14 +26,14 @@ struct AddContactView: View {
         NavigationStack {
             Form {
                 Section {
-                    TextField("Public ID (e.g. 91JLGNSJ)", text: $publicId)
-                        .textInputAutocapitalization(.characters)
+                    TextField("ID or name@server (e.g. 91JLGNSJ or bob@example.com)", text: $publicId)
+                        .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
                         .font(.body.monospaced())
                 } header: {
-                    Text("Add by public ID")
+                    Text("Add by ID or address")
                 } footer: {
-                    Text("Ask your contact for the 8-character ID shown on their Me tab.")
+                    Text("Use the ID/username on their Me tab. For someone on another server, add their full address — name@their-server.com.")
                 }
 
                 switch phase {
@@ -74,13 +74,20 @@ struct AddContactView: View {
         }
     }
 
+    /// A federated address (contains `@`) is kept as typed (case-folded by the
+    /// server); a bare local id is upper-cased to match the random-id alphabet.
     private var trimmed: String {
-        publicId.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+        let raw = publicId.trimmingCharacters(in: .whitespacesAndNewlines)
+        return raw.contains("@") ? raw : raw.uppercased()
     }
 
     private func send() {
         let target = trimmed
         guard !target.isEmpty else { return }
+        if target.contains("@"), Address(target) == nil {
+            phase = .failed("That doesn't look like a valid address (name@server.com).")
+            return
+        }
         if target == appState.session?.publicId {
             phase = .failed("That's your own ID.")
             return

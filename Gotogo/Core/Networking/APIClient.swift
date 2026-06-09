@@ -100,7 +100,7 @@ public final class APIClient: @unchecked Sendable {
     }
 
     func fetchPreKeyBundle(publicId: String) async throws -> FetchedPreKeyBundle {
-        try await send("/v1/prekeys/\(publicId)", method: "GET",
+        try await send("/v1/prekeys/\(pathID(publicId))", method: "GET",
                        body: Optional<Empty>.none, authed: true)
     }
 
@@ -109,7 +109,7 @@ public final class APIClient: @unchecked Sendable {
     /// device (each carries its own `deviceId`, identity, prekeys, ratchet key…).
     func fetchAllPreKeyBundles(publicId: String) async throws -> [FetchedPreKeyBundle] {
         let response: AllPreKeyBundlesResponse =
-            try await send("/v1/prekeys/\(publicId)/devices", method: "GET",
+            try await send("/v1/prekeys/\(pathID(publicId))/devices", method: "GET",
                            body: Optional<Empty>.none, authed: true)
         return response.devices
     }
@@ -138,7 +138,7 @@ public final class APIClient: @unchecked Sendable {
     /// (a one-time entry, consumed; else the device's last-resort entry).
     func claimKeys(namespace: String, publicId: String) async throws -> [ClaimedKeysResponse.Device] {
         let response: ClaimedKeysResponse =
-            try await send("/v1/keydir/\(namespace)/\(publicId)/devices", method: "GET",
+            try await send("/v1/keydir/\(namespace)/\(pathID(publicId))/devices", method: "GET",
                            body: Optional<Empty>.none, authed: true)
         return response.devices
     }
@@ -153,16 +153,22 @@ public final class APIClient: @unchecked Sendable {
 
     // MARK: - Contacts
 
+    /// Requests contact with a local (bare localpart) or remote (`localpart@domain`)
+    /// user. A federated id routes through `toAddress`; the backend federates it.
     @discardableResult
     func requestContact(toPublicId: String) async throws -> ContactStateResponse {
-        try await send("/v1/contacts/request", method: "POST",
-                       body: ContactRequestBody(toPublicId: toPublicId), authed: true)
+        let body = toPublicId.contains("@")
+            ? ContactRequestBody(toAddress: toPublicId)
+            : ContactRequestBody(toPublicId: toPublicId)
+        return try await send("/v1/contacts/request", method: "POST", body: body, authed: true)
     }
 
     @discardableResult
     func acceptContact(fromPublicId: String) async throws -> ContactStateResponse {
-        try await send("/v1/contacts/accept", method: "POST",
-                       body: ContactAcceptBody(fromPublicId: fromPublicId), authed: true)
+        let body = fromPublicId.contains("@")
+            ? ContactAcceptBody(fromAddress: fromPublicId)
+            : ContactAcceptBody(fromPublicId: fromPublicId)
+        return try await send("/v1/contacts/accept", method: "POST", body: body, authed: true)
     }
 
     func listContacts() async throws -> ContactsListResponse {
@@ -170,7 +176,7 @@ public final class APIClient: @unchecked Sendable {
     }
 
     func lookupUser(publicId: String) async throws -> UserLookupResponse {
-        try await send("/v1/users/\(publicId)", method: "GET", body: Optional<Empty>.none, authed: true)
+        try await send("/v1/users/\(pathID(publicId))", method: "GET", body: Optional<Empty>.none, authed: true)
     }
 
     // MARK: - Blocking & reporting
@@ -219,7 +225,7 @@ public final class APIClient: @unchecked Sendable {
     /// Returns `nil` when the account has no log entries yet (server 404).
     func transparencyLog(publicId: String) async throws -> TransparencyLogResponse? {
         do {
-            return try await send("/v1/transparency/\(publicId)", method: "GET",
+            return try await send("/v1/transparency/\(pathID(publicId))", method: "GET",
                                   body: Optional<Empty>.none, authed: true)
         } catch let error as APIError {
             if case .server(let status, _, _) = error, status == 404 { return nil }
@@ -230,12 +236,57 @@ public final class APIClient: @unchecked Sendable {
     // MARK: - Messages
 
     func sendMessage(_ request: SendMessageRequest) async throws -> SendMessageResponse {
-        try await send("/v1/messages", method: "POST", body: request, authed: true)
+        // A federated recipient identifier (localpart@domain) carried in toPublicId
+        // is promoted to toAddress so the backend routes it across servers.
+        var body = request
+        if request.toAddress == nil, request.toPublicId.contains("@") {
+            body = SendMessageRequest(toPublicId: request.toPublicId,
+                                      toDeviceId: request.toDeviceId,
+                                      ciphertext: request.ciphertext,
+                                      contentType: request.contentType,
+                                      clientMessageId: request.clientMessageId,
+                                      toAddress: request.toPublicId)
+        }
+        return try await send("/v1/messages", method: "POST", body: body, authed: true)
     }
 
     func sync(limit: Int) async throws -> SyncResponse {
         try await send("/v1/messages/sync?limit=\(limit)", method: "GET",
                        body: Optional<Empty>.none, authed: true)
+    }
+
+    // MARK: - Sealed sender (V2-C)
+
+    /// Publishes the caller's sealed-sender access key (shared with contacts via
+    /// the E2EE profile) so they can send sender-anonymous messages.
+    @discardableResult
+    func setSealedSenderKey(_ accessKey: Data) async throws -> Bool {
+        struct Body: Encodable { let accessKey: Data }
+        struct Resp: Decodable { let published: Bool }
+        let r: Resp = try await send("/v1/account/sealed-sender-key", method: "PUT",
+                                     body: Body(accessKey: accessKey), authed: true)
+        return r.published
+    }
+
+    /// Sends a sealed (sender-anonymous) message using the recipient's access key
+    /// (read from their decrypted profile). The recipient's server learns no
+    /// sender; the sender identity travels inside `ciphertext`.
+    func sendSealedMessage(toAddress: String, toDeviceId: String, accessKey: Data,
+                           ciphertext: Data, contentType: String = "text",
+                           clientMessageId: String = "") async throws -> SendMessageResponse {
+        struct Body: Encodable {
+            let toAddress: String
+            let toDeviceId: String
+            let accessKey: Data
+            let ciphertext: Data
+            let contentType: String
+            let clientMessageId: String
+        }
+        return try await send("/v1/messages/sealed", method: "POST",
+                              body: Body(toAddress: toAddress, toDeviceId: toDeviceId,
+                                         accessKey: accessKey, ciphertext: ciphertext,
+                                         contentType: contentType, clientMessageId: clientMessageId),
+                              authed: true)
     }
 
     // MARK: - Groups
@@ -306,7 +357,7 @@ public final class APIClient: @unchecked Sendable {
     /// (no profile, or the caller holds no grant for it).
     func fetchProfile(publicId: String) async throws -> FetchedProfile? {
         do {
-            return try await send("/v1/profile/\(publicId)", method: "GET",
+            return try await send("/v1/profile/\(pathID(publicId))", method: "GET",
                                   body: Optional<Empty>.none, authed: true)
         } catch let error as APIError {
             if case .server(let status, _, _) = error, status == 404 { return nil }
@@ -322,6 +373,21 @@ public final class APIClient: @unchecked Sendable {
 
     /// Empty placeholder for GET/DELETE bodies.
     private struct Empty: Codable {}
+
+    /// Unreserved characters safe to leave unescaped in a path segment. A federated
+    /// id `localpart@domain` carries `@`, which must be percent-encoded (`%40`) so
+    /// it lands in the path and is not mistaken for URL userinfo.
+    private static let pathSegmentAllowed: CharacterSet = {
+        var s = CharacterSet.alphanumerics
+        s.insert(charactersIn: "-._~")
+        return s
+    }()
+
+    /// Percent-encodes a user identifier (bare localpart or `localpart@domain`) for
+    /// safe interpolation into a URL path segment.
+    private func pathID(_ id: String) -> String {
+        id.addingPercentEncoding(withAllowedCharacters: Self.pathSegmentAllowed) ?? id
+    }
 
     private func makeRequest(_ path: String, method: String, authed: Bool) throws -> URLRequest {
         guard let url = URL(string: path, relativeTo: baseURL) else { throw APIError.invalidURL }

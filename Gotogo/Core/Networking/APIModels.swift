@@ -221,11 +221,15 @@ struct CommitHeadResponse: Decodable {
 // MARK: - Contacts
 
 struct ContactRequestBody: Encodable {
-    let toPublicId: String
+    // Federation-aware: bare localpart for a local recipient, or `toAddress`
+    // (localpart@domain) for a remote one. nil optionals are omitted on the wire.
+    var toPublicId: String? = nil
+    var toAddress: String? = nil
 }
 
 struct ContactAcceptBody: Encodable {
-    let fromPublicId: String
+    var fromPublicId: String? = nil
+    var fromAddress: String? = nil
 }
 
 struct ContactStateResponse: Decodable {
@@ -245,6 +249,8 @@ struct UserLookupResponse: Decodable {
     let publicId: String
     let exists: Bool
     let hasDevice: Bool
+    /// New address if the user moved servers (account portability); follow it.
+    let movedTo: String?
 }
 
 // MARK: - Messages
@@ -255,6 +261,9 @@ struct SendMessageRequest: Encodable {
     let ciphertext: Data
     let contentType: String
     let clientMessageId: String
+    /// Federation-aware recipient (localpart@domain). Set for a remote recipient;
+    /// the backend prefers it over `toPublicId`. Omitted on the wire when nil.
+    var toAddress: String? = nil
 }
 
 struct SendMessageResponse: Decodable {
@@ -266,10 +275,18 @@ struct SendMessageResponse: Decodable {
 struct InboundMessage: Decodable, Sendable, Equatable {
     let id: String
     let fromPublicId: String
+    /// Federation-aware sender: bare localpart for a local sender, localpart@domain
+    /// for a remote one. Prefer this as the conversation/session key (see
+    /// `senderAddress`); absent on older servers. Decoded as optional for back-compat.
+    let fromAddress: String?
     let fromDeviceId: String
     let ciphertext: Data
     let contentType: String
     let createdAt: Date
+
+    /// The routing identity: the full address when present, else the bare localpart
+    /// (so local conversations keep their existing bare key — no migration needed).
+    var senderAddress: String { fromAddress ?? fromPublicId }
 }
 
 struct SyncResponse: Decodable {
@@ -364,7 +381,12 @@ struct TransparencyHeadResponse: Decodable {
 }
 
 /// `GET /v1/transparency/{publicId}` → the account's published identity-key
-/// entries, each with an RFC 6962 inclusion proof against `rootHash`/`treeSize`.
+/// entries, each with an RFC 6962 inclusion proof.
+///
+/// For a LOCAL id the response carries top-level `treeSize`/`rootHash` (trusted via
+/// TLS to our own server). For a REMOTE `localpart@domain` it carries a
+/// `signedHead` signed by the contact's home server, which the client verifies
+/// against that domain's pinned transparency key (see `FederationDirectory`).
 struct TransparencyLogResponse: Decodable {
     struct Entry: Decodable {
         let deviceId: String
@@ -375,9 +397,20 @@ struct TransparencyLogResponse: Decodable {
         let auditPath: [Data]
     }
     let publicId: String
-    let treeSize: Int
-    let rootHash: Data
+    let treeSize: Int?
+    let rootHash: Data?
+    let signedHead: FederationDirectory.SignedHead?
     let entries: [Entry]
+
+    /// Effective tree size — from the signed head (remote) or the top level (local).
+    var effectiveTreeSize: Int { signedHead?.treeSize ?? treeSize ?? 0 }
+
+    /// Effective Merkle root bytes — decoded from the signed head (remote) or the
+    /// top-level base64 field (local).
+    var effectiveRoot: Data {
+        if let sh = signedHead { return Data(base64Encoded: sh.rootHash) ?? Data() }
+        return rootHash ?? Data()
+    }
 }
 
 // MARK: - Profiles

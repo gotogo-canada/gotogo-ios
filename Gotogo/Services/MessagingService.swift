@@ -102,6 +102,11 @@ public final class MessagingService {
     /// server; this is just the "it changed, refresh it" ping.
     var profileUpdatedHandler: ((String) -> Void)?
 
+    /// Addresses the user has blocked, used to drop SEALED messages client-side
+    /// (the server can't enforce blocking on a sender-anonymous message — V2-C).
+    /// `AppState` keeps this in sync with the user's blocklist.
+    public var blockedSealedSenders: Set<String> = []
+
     /// Public ids whose `account_deleted` system event we have processed this
     /// session. Lets a caller (or a test) confirm a deletion was handled even if
     /// no handler was installed at ingest time. Written by `handleSystem` (in the
@@ -192,9 +197,17 @@ public final class MessagingService {
     /// Sends a contact request, first verifying the target user exists. Standard
     /// prekeys are uploaded at registration/recovery/device-link time.
     func requestContact(publicId: String) async throws {
-        let lookup = try await api.lookupUser(publicId: publicId)
+        var target = publicId
+        var lookup = try await api.lookupUser(publicId: target)
+        // Follow an account-move redirect (portability): the user now lives at a
+        // new address on another server. The identity key is unchanged, so the
+        // contact re-pins transparently on the new address.
+        if let movedTo = lookup.movedTo, !movedTo.isEmpty {
+            target = movedTo
+            lookup = try await api.lookupUser(publicId: target)
+        }
         guard lookup.exists else { throw MessagingError.userNotFound }
-        _ = try await api.requestContact(toPublicId: publicId)
+        _ = try await api.requestContact(toPublicId: target)
     }
 
     /// Accepts an incoming contact request.

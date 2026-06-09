@@ -9,6 +9,7 @@
 
 import Foundation
 import CryptoKit
+import UIKit
 
 /// Errors specific to the auth flows.
 public enum AuthError: Error, Sendable, LocalizedError {
@@ -52,11 +53,61 @@ public final class AuthService {
     init(api: APIClient,
                 engine: CryptoEngine,
                 store: SecretStoring,
-                deviceName: String = "iPhone Simulator") {
+                deviceName: String? = nil) {
         self.api = api
         self.engine = engine
         self.store = store
-        self.deviceName = deviceName
+        self.deviceName = deviceName ?? Self.defaultDeviceName()
+    }
+
+    static func defaultDeviceName() -> String {
+        defaultDeviceName(isSimulator: Self.isSimulatorBuild,
+                          userInterfaceIdiom: UIDevice.current.userInterfaceIdiom)
+    }
+
+    nonisolated static func defaultDeviceName(isSimulator: Bool,
+                                              userInterfaceIdiom: UIUserInterfaceIdiom) -> String {
+        if isSimulator {
+            switch userInterfaceIdiom {
+            case .pad: return "iPad Simulator"
+            default: return "iPhone Simulator"
+            }
+        }
+
+        switch userInterfaceIdiom {
+        case .phone: return "iPhone"
+        case .pad: return "iPad"
+        case .mac: return "Mac"
+        case .tv: return "Apple TV"
+        case .carPlay: return "CarPlay"
+        case .vision: return "Apple Vision"
+        default: return "iOS Device"
+        }
+    }
+
+    private nonisolated static var isSimulatorBuild: Bool {
+        #if targetEnvironment(simulator)
+        return true
+        #else
+        return false
+        #endif
+    }
+
+    static func normalizedDeviceName(_ storedName: String) -> String {
+        normalizedDeviceName(storedName,
+                             isSimulator: Self.isSimulatorBuild,
+                             userInterfaceIdiom: UIDevice.current.userInterfaceIdiom)
+    }
+
+    nonisolated static func normalizedDeviceName(_ storedName: String,
+                                                 isSimulator: Bool,
+                                                 userInterfaceIdiom: UIUserInterfaceIdiom) -> String {
+        let runtimeName = defaultDeviceName(isSimulator: isSimulator,
+                                            userInterfaceIdiom: userInterfaceIdiom)
+        if !isSimulator && (storedName == "iPhone Simulator" || storedName == "iPad Simulator") {
+            return runtimeName
+        }
+        return storedName
     }
 
     /// The persisted session, if the user is signed in.

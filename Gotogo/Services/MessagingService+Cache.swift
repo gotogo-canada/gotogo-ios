@@ -44,7 +44,7 @@ extension MessagingService {
             guard processedEnvelopeIds.insert(raw.id).inserted else { continue }
             switch decode(raw, identity: identity, preKeyStore: preKeyStore) {
             case .message(let message):
-                append(message, to: raw.fromPublicId)
+                append(message, to: raw.senderAddress)
                 produced.append(message)
             case .filed(let message):
                 // Self-sync: already appended to `conversation(syncPeer)` in decode.
@@ -91,7 +91,7 @@ extension MessagingService {
             // grant + encrypted profile are already on the server). Never surfaced as
             // a chat message.
             if let content, content.type == "profile_updated" {
-                profileUpdatedHandler?(raw.fromPublicId)
+                profileUpdatedHandler?(raw.senderAddress)
                 return .consumed
             }
 
@@ -99,7 +99,7 @@ extension MessagingService {
             // to the group handler and don't surface them as a 1:1 chat message.
             if let handler = groupHandler,
                let content, content.type.hasPrefix("group_") {
-                handler(content, raw.fromPublicId)
+                handler(content, raw.senderAddress)
                 return .consumed
             }
 
@@ -107,17 +107,32 @@ extension MessagingService {
             // content under the recipient (`syncPeer`) as `isMine`, not as a chat
             // from myself. Requires a syncPeer; without it we have nowhere to file it.
             if let mySession = store.loadSession(),
-               raw.fromPublicId == mySession.publicId,
+               raw.senderAddress == mySession.publicId,
                let content, let target = content.syncPeer {
                 let mine = selfSyncMessage(from: content, target: target, raw: raw)
                 append(mine, to: target)
                 return .filed(mine)
             }
 
+            // Sealed (sender-anonymous) message: the server stored NO sender, so
+            // the real sender is carried inside the content. Route the conversation
+            // by it, and apply client-side blocking — the server couldn't, because
+            // it can't see a sealed sender (V2-C).
+            if raw.senderAddress.isEmpty, let content, let sealedFrom = content.sealedSender {
+                if SealedSender.shouldDrop(senderAddress: sealedFrom, blocked: blockedSealedSenders) {
+                    return .consumed
+                }
+                return .message(ChatMessage(id: raw.id,
+                                            peerPublicId: sealedFrom,
+                                            isMine: false,
+                                            body: content.text ?? "",
+                                            createdAt: raw.createdAt))
+            }
+
             return .message(chatMessage(from: plaintext, raw: raw))
         } catch {
             return .message(ChatMessage(id: raw.id,
-                                        peerPublicId: raw.fromPublicId,
+                                        peerPublicId: raw.senderAddress,
                                         isMine: false,
                                         body: "[Unable to decrypt message]",
                                         createdAt: raw.createdAt,
@@ -179,14 +194,14 @@ extension MessagingService {
 
     /// Applies an inbound deletion control. The target conversation is resolved
     /// RELATIVE to this receiver: a control from the peer acts on the peer's thread
-    /// (`raw.fromPublicId`); a control mirrored from MY OWN other device carries the
+    /// (`raw.senderAddress`); a control mirrored from MY OWN other device carries the
     /// real peer in `syncPeer`. `delete_conversation` removes the deleter's messages
     /// on a peer's device, or the whole local thread on my own devices.
     /// `delete_message` removes the listed sender `clientId`s wherever they landed.
     private func handleDeleteControl(_ content: MessageContent, raw: InboundMessage) {
         let mine = store.loadSession()?.publicId
-        let fromSelf = (mine != nil && raw.fromPublicId == mine)
-        let conversationId = fromSelf ? (content.syncPeer ?? "") : raw.fromPublicId
+        let fromSelf = (mine != nil && raw.senderAddress == mine)
+        let conversationId = fromSelf ? (content.syncPeer ?? "") : raw.senderAddress
         guard !conversationId.isEmpty else { return }
 
         switch content.type {
@@ -213,7 +228,7 @@ extension MessagingService {
         guard let content = try? decoder.decode(MessageContent.self, from: plaintext) else {
             // Legacy / non-JSON plaintext: treat as raw UTF-8 text.
             return ChatMessage(id: raw.id,
-                               peerPublicId: raw.fromPublicId,
+                               peerPublicId: raw.senderAddress,
                                isMine: false,
                                body: String(decoding: plaintext, as: UTF8.self),
                                createdAt: raw.createdAt)
@@ -221,23 +236,23 @@ extension MessagingService {
         var message: ChatMessage
         switch content.type {
         case "image":
-            message = ChatMessage(id: raw.id, peerPublicId: raw.fromPublicId, isMine: false,
+            message = ChatMessage(id: raw.id, peerPublicId: raw.senderAddress, isMine: false,
                                   body: content.text ?? "", createdAt: raw.createdAt,
                                   media: content.media, mediaKind: "image")
         case "video":
-            message = ChatMessage(id: raw.id, peerPublicId: raw.fromPublicId, isMine: false,
+            message = ChatMessage(id: raw.id, peerPublicId: raw.senderAddress, isMine: false,
                                   body: content.text ?? "", createdAt: raw.createdAt,
                                   media: content.media, mediaKind: "video")
         case "voice":
-            message = ChatMessage(id: raw.id, peerPublicId: raw.fromPublicId, isMine: false,
+            message = ChatMessage(id: raw.id, peerPublicId: raw.senderAddress, isMine: false,
                                   body: "", createdAt: raw.createdAt,
                                   media: content.media, mediaKind: "voice", durationMs: content.durationMs)
         case "sticker":
-            message = ChatMessage(id: raw.id, peerPublicId: raw.fromPublicId, isMine: false,
+            message = ChatMessage(id: raw.id, peerPublicId: raw.senderAddress, isMine: false,
                                   body: "", createdAt: raw.createdAt,
                                   mediaKind: "sticker", stickerId: content.stickerId)
         default: // "text"
-            message = ChatMessage(id: raw.id, peerPublicId: raw.fromPublicId, isMine: false,
+            message = ChatMessage(id: raw.id, peerPublicId: raw.senderAddress, isMine: false,
                                   body: content.text ?? "", createdAt: raw.createdAt)
         }
         // Carry the sender's stable cross-device id so "delete for everyone" can

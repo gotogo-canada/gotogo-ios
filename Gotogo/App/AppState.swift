@@ -77,7 +77,11 @@ final class AppState {
                                          keyPackages: mlsKeyPackages,
                                          myPublicId: { store.loadSession()?.publicId },
                                          myDeviceId: { store.loadSession()?.deviceId })
-        self.transparency = TransparencyService(api: api, engine: engine, store: store)
+        // FederationDirectory verifies remote contacts' server-signed transparency
+        // heads against each contact domain's TOFU-pinned key (docs/federation/06).
+        let federationDirectory = FederationDirectory()
+        self.transparency = TransparencyService(api: api, engine: engine, store: store,
+                                                directory: federationDirectory)
         self.profileStore = ProfileStore(service: profiles)
 
         // When a peer deletes their account, the messaging layer purges their local
@@ -108,11 +112,12 @@ final class AppState {
 
         // Restore any persisted session and prime the API + media tokens.
         if let existing = store.loadSession() {
-            api.setToken(existing.token)
+            let restored = normalizeStoredSession(existing)
+            api.setToken(restored.token)
             self.messaging.syncMediaToken()
-            self.session = existing
+            self.session = restored
             updateFingerprint()
-            self.profileStore.loadOwn(publicId: existing.publicId)
+            self.profileStore.loadOwn(publicId: restored.publicId)
         }
     }
 
@@ -121,11 +126,21 @@ final class AppState {
 
     /// Adopts a freshly created/recovered session and starts realtime.
     func adopt(_ session: Session) {
+        let session = normalizeStoredSession(session)
         self.session = session
         messaging.syncMediaToken()
         updateFingerprint()
         profileStore.loadOwn(publicId: session.publicId)
         conversations = messaging.allConversations()
+    }
+
+    private func normalizeStoredSession(_ session: Session) -> Session {
+        let name = AuthService.normalizedDeviceName(session.deviceName)
+        guard name != session.deviceName else { return session }
+        var normalized = session
+        normalized.deviceName = name
+        try? secretStore.saveSession(normalized)
+        return normalized
     }
 
     /// Clears the session locally (after logout/delete) and stops realtime.

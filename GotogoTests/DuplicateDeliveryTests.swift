@@ -35,7 +35,7 @@ final class DuplicateDeliveryTests: XCTestCase {
 
     func testRedeliveredEnvelopeIsDecodedOnlyOnce() throws {
         let messaging = try messagingWithKeys()
-        let raw = InboundMessage(id: "ENV-DUP-1", fromPublicId: "AAAA0001", fromDeviceId: "d1",
+        let raw = InboundMessage(id: "ENV-DUP-1", fromPublicId: "AAAA0001", fromAddress: nil, fromDeviceId: "d1",
                                  ciphertext: Data("opaque-ratchet-ciphertext".utf8),
                                  contentType: "text",
                                  createdAt: Date(timeIntervalSince1970: 1))
@@ -54,10 +54,10 @@ final class DuplicateDeliveryTests: XCTestCase {
 
     func testDistinctEnvelopesAreNotDeduped() throws {
         let messaging = try messagingWithKeys()
-        let a = InboundMessage(id: "E-A", fromPublicId: "AAAA0001", fromDeviceId: "d1",
+        let a = InboundMessage(id: "E-A", fromPublicId: "AAAA0001", fromAddress: nil, fromDeviceId: "d1",
                                ciphertext: Data("c1".utf8), contentType: "text",
                                createdAt: Date(timeIntervalSince1970: 1))
-        let b = InboundMessage(id: "E-B", fromPublicId: "AAAA0001", fromDeviceId: "d1",
+        let b = InboundMessage(id: "E-B", fromPublicId: "AAAA0001", fromAddress: nil, fromDeviceId: "d1",
                                ciphertext: Data("c2".utf8), contentType: "text",
                                createdAt: Date(timeIntervalSince1970: 2))
         // Two genuinely different envelopes (distinct ids) must both be processed.

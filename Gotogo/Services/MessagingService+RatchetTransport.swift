@@ -228,6 +228,32 @@ extension MessagingService {
         }
     }
 
+    /// Sends a SEALED (sender-anonymous) text message (V2-C). The message is
+    /// sealed with the normal Double-Ratchet (so it stays E2EE), but the sender
+    /// identity is carried *inside* the encrypted content and the envelope is
+    /// posted to the sealed endpoint with the recipient's access key — so the
+    /// recipient's server delivers it without ever learning who sent it.
+    /// `accessKey` is read from the recipient's decrypted profile.
+    func sendSealedText(_ text: String, toAddress: String, accessKey: Data) async throws {
+        guard let local = store.loadSession() else { throw MessagingError.notSignedIn }
+        var content = MessageContent(type: "text")
+        content.text = text
+        content.sealedSender = local.publicId // the recipient learns the sender on decrypt
+        let plaintext = try encoder.encode(content)
+
+        let devices = try await ratchetDevices(for: toAddress)
+        guard !devices.isEmpty else { throw MessagingError.userNotFound }
+        for bundle in devices {
+            let envelope = try ratchetEnvelope(plaintext, to: toAddress, bundle: bundle, local: local)
+            _ = try await api.sendSealedMessage(toAddress: toAddress,
+                                                toDeviceId: bundle.deviceId,
+                                                accessKey: accessKey,
+                                                ciphertext: try encoder.encode(envelope),
+                                                contentType: "text",
+                                                clientMessageId: UUID().uuidString)
+        }
+    }
+
     private func ratchetEnvelope(_ plaintext: Data,
                                  to peerPublicId: String,
                                  bundle: FetchedPreKeyBundle,
